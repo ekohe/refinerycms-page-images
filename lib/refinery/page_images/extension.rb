@@ -9,22 +9,31 @@ module Refinery
 
         accepts_nested_attributes_for :images, :allow_destroy => false
 
+        attr_accessor :image_pages_marked_for_deletion
+
+        after_save :delete_image_pages_as_necessary
         # need to do it this way because of the way accepts_nested_attributes_for
         # deletes an already defined images_attributes
         module_eval do
+          def delete_image_pages_as_necessary
+            if @image_pages_marked_for_deletion
+              @image_pages_marked_for_deletion.each do |image_page|
+                image_page.destroy
+              end
+            end
+          end
+
+
           def images_attributes=(data)
-            data = data.reject {|key, data| data.blank?}
-            ids_to_keep = data.map{|i, d| d['image_page_id']}.compact
+            ids_to_keep = data.map{|i, d| d['id']}.compact
 
             image_pages_to_delete = if ids_to_keep.empty?
-              self.image_pages
+              @image_pages_marked_for_deletion = self.image_pages.all
+              self.image_pages.delete_if {true}
             else
-              self.image_pages.where(
-                Refinery::ImagePage.arel_table[:id].not_in(ids_to_keep)
-              )
+              @image_pages_marked_for_deletion = self.image_pages.where(Refinery::ImagePage.arel_table[:image_id].not_in(ids_to_keep)).all
+              self.image_pages.delete_if { |ip| !ids_to_keep.include?(ip.image_id.to_s)}
             end
-
-            image_pages_to_delete.destroy_all
 
             data.each do |i, image_data|
               image_page_id, image_id, caption =
@@ -32,15 +41,10 @@ module Refinery
 
               next if image_id.blank?
 
-              image_page = if image_page_id.present?
-                self.image_pages.find(image_page_id)
-              else
-                self.image_pages.build(:image_id => image_id)
-              end
+              image_page = (self.image_pages.detect {|ip| ip.image_id.to_s == image_id.to_s } || self.image_pages.build(:image_id => image_id))
 
               image_page.position = i
               image_page.caption = caption if Refinery::PageImages.captions
-              image_page.save
             end
           end
         end
